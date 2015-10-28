@@ -1,17 +1,105 @@
 {-# LANGUAGE ForeignFunctionInterface #-}
 {-# LANGUAGE DeriveGeneric #-}
+{-# LANGUAGE ScopedTypeVariables #-}
 module System.Hwloc
    ( getApiVersion
+   , CpuSet (..)
+   , NodeSet (..)
+   , ObjectType (..)
+   , CacheType (..)
+   , BridgeType (..)
+   , OSDeviceType (..)
+   , compareTypes
+   , PageType(..)
+   , MemoryObject (..)
+   , Object (..)
+   , CacheAttribute (..)
+   , GroupAttribute (..)
+   , PCIDeviceAttribute (..)
+   , BridgeAttribute (..)
+   , OSDeviceAttribute (..)
+   , Attribute (..)
+   , Distance (..)
+   , initTopology
+   , loadTopology
+   , destroyTopology
+   , dupTopology
+   , checkTopology
+   , getTopologyDepth
+   , getTypeDepth
+   , TypeDepth (..)
+   , CpuBindFlag (..)
+   , fromFlags
+   , setCpuBind
+   , getCpuBind
+   , setProcCpuBind
+   , getProcCpuBind
+   , setThreadCpuBind
+   , getThreadCpuBind
+   , getLastCpuLocation
+   , getProcLastCpuLocation
+   , MemBindPolicy (..)
+   , MemBindFlag (..)
+   , setMemBindNodeSet
+   , setMemBind
+   , getMemBindNodeSet
+   , getMemBind
+   , setProcMemBindNodeSet
+   , setProcMemBind
+   , getProcMemBindNodeSet
+   , getProcMemBind
+   , setAreaMemBindNodeSet
+   , setAreaMemBind
+   , getAreaMemBindNodeSet
+   , getAreaMemBind
+   , alloc
+   , allocMemBindNodeSet
+   , allocMemBindCpuSet
+   , free
+   , setPid
+   , setSynthetic
+   , setXml
+   , setXmlBuffer
+   , TopologyFlag (..)
+   , setFlags
+   , getFlags
+   , isThisSystem
+   , DiscoverySupport (..)
+   , CpuBindSupport (..)
+   , MemBindSupport (..)
+   , TopologySupport (..)
+   , getSupport
+   , ignoreType
+   , ignoreTypeKeepStructure
+   , ignoreAllKeepStructure
+   , setDistanceMatrix
+   , setUserData
+   , getUserData
+   , RestrictFlag (..)
+   , restrict
+   , insertMiscObject
+   , allocGroupObject
+   , insertGroupObject
+   , addSetsFromOtherObject
    )
 where
 
 import Data.Word
-import Data.Int
 import Data.Bits
+import Data.Vector
+import Data.Map
+import Data.Text (Text)
 
 import Foreign.Storable
+import Foreign.Ptr
+import Foreign.C.Types (CSize(..))
+import Foreign.C.String (CString)
+import Foreign.CStorable
 import Foreign.Marshal.Array
+import Foreign.Marshal.Alloc (alloca)
 import GHC.Generics (Generic)
+
+import System.Hwloc.Bitmap (Bitmap (..))
 
 -- | Indicate at runtime which hwloc API version was used at build time.
 foreign import ccall "hwloc_get_api_version" getApiVersion :: Word
@@ -43,7 +131,7 @@ foreign import ccall "hwloc_get_api_version" getApiVersion :: Word
 -- Each bit may be converted into a PU object using
 -- hwloc_get_pu_obj_by_os_index().
 -- 
-newtype CpuSet = CpuSet BitMap
+newtype CpuSet = CpuSet Bitmap deriving (Show)
 
 -- | A node set is a bitmap whose bits are set according to NUMA
 -- memory node physical OS indexes.
@@ -58,7 +146,7 @@ newtype CpuSet = CpuSet BitMap
 -- 
 -- See also \ref hwlocality_helper_nodeset_convert.
 -- 
-newtype NodeSet = NodeSet Bitmap
+newtype NodeSet = NodeSet Bitmap deriving (Show)
 
 
 
@@ -68,7 +156,7 @@ newtype NodeSet = NodeSet Bitmap
 -- may be defined in the future!  If you need to compare types, use
 -- hwloc_compare_types() instead.
 -- 
-data TopologyObjectType
+data ObjectType
    = ObjectTypeSystem      -- ^ Whole system (may be a cluster of machines).  
                            -- The whole system that is accessible to hwloc.  
                            -- That may comprise several machines in SSI systems.
@@ -207,7 +295,7 @@ compareTypes obj1 obj2 =
 foreign import ccall "hwloc_compare_types" compareTypes' :: Int -> Int -> Int
 
 -- | Memory page type
-data Pagetype = PageType
+data PageType = PageType
    { pageTypeSize    :: Word64   -- ^ Size of pages
    , pageTypeCount   :: Word64   -- ^ Number of pages of this size
    }
@@ -258,7 +346,7 @@ data Object = Object
    , objectName      :: String            -- ^ Object description if any
    , objectMemory    :: MemoryObject      -- ^ Memory attributes
 
-   , objectAttribute :: ObjectAttribute   -- ^ Object type-specific Attributes,
+   , objectAttribute :: Attribute         -- ^ Object type-specific Attributes,
 
    , objectDepth     :: Word              -- ^ Vertical index in the hierarchy.
                                           -- If the topology is symmetric, this is equal to the
@@ -406,18 +494,18 @@ data GroupAttribute = GroupAttribute
    deriving (Show)
 
 -- | PCI Device specific Object Attributes
-data PCIDeviceAttribute
-   { pciDeviceAttributeDomain    :: Word16
-   , pciDeviceAttributeBus       :: Word8
-   , pciDeviceAttributeDevice    :: Word8
-   , pciDeviceAttributeFunc      :: Word8
-   , pciDeviceAttributeClassId   :: Word16
-   , pciDeviceAttributeVendorId  :: Word16
-   , pciDeviceAttributeDeviceId  :: Word16
+data PCIDeviceAttribute = PCIDeviceAttribute
+   { pciDeviceAttributeDomain       :: Word16
+   , pciDeviceAttributeBus          :: Word8
+   , pciDeviceAttributeDevice       :: Word8
+   , pciDeviceAttributeFunc         :: Word8
+   , pciDeviceAttributeClassId      :: Word16
+   , pciDeviceAttributeVendorId     :: Word16
+   , pciDeviceAttributeDeviceId     :: Word16
    , pciDeviceAttributeSubVendorId  :: Word16
    , pciDeviceAttributeSubDeviceId  :: Word16
-   , pciDeviceAttributeRevision  :: Word8
-   , pciDeviceAttributeLinkSpeed :: Float    -- ^ in GB/s
+   , pciDeviceAttributeRevision     :: Word8
+   , pciDeviceAttributeLinkSpeed    :: Float    -- ^ in GB/s
    }
    deriving (Show)
 
@@ -578,7 +666,7 @@ foreign import ccall "hwloc_topology_get_depth" getTopologyDepth :: Topology -> 
 -- depth by the application. In particular, it should not be compared with
 -- any other object depth or with the entire topology depth.
 -- 
-getTypeDepth :: Topology -> ObjectType -> IO Int
+getTypeDepth :: Topology -> ObjectType -> IO TypeDepth
 getTypeDepth topo typ = do
    r <- getTypeDepth' topo (fromEnum typ)
    return $ case r of
@@ -669,7 +757,7 @@ data TypeDepth
 data CpuBindFlag
    = CpuBindProcess  -- ^ Bind all threads of the current (possibly) multithreaded process.
    | CpuBindThread   -- ^ Bind current thread of current process.
-   | cpuBindStrict   -- ^ Request for strict binding from the OS.
+   | CpuBindStrict   -- ^ Request for strict binding from the OS.
                      -- 
                      -- By default, when the designated CPUs are all busy while other
                      -- CPUs are idle, operating systems may execute the thread/process
@@ -709,11 +797,11 @@ data CpuBindFlag
                         -- 
    deriving (Show,Eq,Enum)
 
-fromFlags :: Enum a => [a] -> Int
+fromFlags :: Enum a => [a] -> Word
 fromFlags = rec 0
    where
       rec v [] = v
-      rec v (x:xs) = rec (v .|. (1 `shiftL` fromEnum x) xs
+      rec v (x:xs) = rec (v .|. (1 `shiftL` fromIntegral (fromEnum x))) xs
 
 -- | Bind current process or thread on cpus given in physical bitmap \p set.
 -- 
@@ -723,7 +811,7 @@ fromFlags = rec 0
 setCpuBind :: Topology -> CpuSet -> [CpuBindFlag] -> IO Int
 setCpuBind topo cpuset flags = setCpuBind' topo cpuset (fromFlags flags)
 
-foreign import ccall "hwloc_set_cpubind" setCpuBind' :: Topology -> CpuSet -> Int -> IO Int
+foreign import ccall "hwloc_set_cpubind" setCpuBind' :: Topology -> CpuSet -> Word -> IO Int
 
 
 -- | Get current process or thread binding.
@@ -734,7 +822,7 @@ foreign import ccall "hwloc_set_cpubind" setCpuBind' :: Topology -> CpuSet -> In
 getCpuBind :: Topology -> CpuSet -> [CpuBindFlag] -> IO Int
 getCpuBind topo cpuset flags = getCpuBind' topo cpuset (fromFlags flags)
 
-foreign import ccall "hwloc_get_cpubind" getCpuBind' :: Topology -> CpuSet -> Int -> IO Int
+foreign import ccall "hwloc_get_cpubind" getCpuBind' :: Topology -> CpuSet -> Word -> IO Int
 
 
 
@@ -752,7 +840,7 @@ foreign import ccall "hwloc_get_cpubind" getCpuBind' :: Topology -> CpuSet -> In
 setProcCpuBind :: Topology -> Word -> CpuSet -> [CpuBindFlag] -> IO Int
 setProcCpuBind topo pid cpuset flags = setProcCpuBind' topo pid cpuset (fromFlags flags)
 
-foreign import ccall "hwloc_set_proc_cpubind" setProcCpuBind' :: Topology -> Word -> CpuSet -> Int -> IO Int
+foreign import ccall "hwloc_set_proc_cpubind" setProcCpuBind' :: Topology -> Word -> CpuSet -> Word -> IO Int
 
 -- | Get the current physical binding of process \p pid.
 -- 
@@ -768,7 +856,7 @@ foreign import ccall "hwloc_set_proc_cpubind" setProcCpuBind' :: Topology -> Wor
 getProcCpuBind :: Topology -> Word -> CpuSet -> [CpuBindFlag] -> IO Int
 getProcCpuBind topo pid cpuset flags = getProcCpuBind' topo pid cpuset (fromFlags flags)
 
-foreign import ccall "hwloc_get_proc_cpubind" getProcCpuBind' :: Topology -> Word -> CpuSet -> Int -> IO Int
+foreign import ccall "hwloc_get_proc_cpubind" getProcCpuBind' :: Topology -> Word -> CpuSet -> Word -> IO Int
 
 -- | Bind a thread \p thread on cpus given in physical bitmap \p set.
 -- 
@@ -780,7 +868,7 @@ foreign import ccall "hwloc_get_proc_cpubind" getProcCpuBind' :: Topology -> Wor
 setThreadCpuBind :: Topology -> Word -> CpuSet -> [CpuBindFlag] -> IO Int
 setThreadCpuBind topo tid cpuset flags = setThreadCpuBind' topo tid cpuset (fromFlags flags)
 
-foreign import ccall "hwloc_set_thread_cpubind" setThreadCpuBind' :: Topology -> Word -> CpuSet -> Int -> IO Int
+foreign import ccall "hwloc_set_thread_cpubind" setThreadCpuBind' :: Topology -> Word -> CpuSet -> Word -> IO Int
 
 
 -- | Get the current physical binding of thread \p tid.
@@ -793,7 +881,7 @@ foreign import ccall "hwloc_set_thread_cpubind" setThreadCpuBind' :: Topology ->
 getThreadCpuBind :: Topology -> Word -> CpuSet -> [CpuBindFlag] -> IO Int
 getThreadCpuBind topo tid cpuset flags = getThreadCpuBind' topo tid cpuset (fromFlags flags)
 
-foreign import ccall "hwloc_get_thread_cpubind" getThreadCpuBind' :: Topology -> Word -> CpuSet -> Int -> IO Int
+foreign import ccall "hwloc_get_thread_cpubind" getThreadCpuBind' :: Topology -> Word -> CpuSet -> Word -> IO Int
 
 -- | Get the last physical CPU where the current process or thread ran.
 -- 
@@ -811,7 +899,7 @@ foreign import ccall "hwloc_get_thread_cpubind" getThreadCpuBind' :: Topology ->
 getLastCpuLocation :: Topology -> CpuSet -> [CpuBindFlag] -> IO Int
 getLastCpuLocation topo cpuset flags = getLastCpuLocation' topo cpuset (fromFlags flags)
 
-foreign import ccall "hwloc_get_last_cpu_location" getLastCpuLocation' :: Topology -> CpuSet -> Int -> IO Int
+foreign import ccall "hwloc_get_last_cpu_location" getLastCpuLocation' :: Topology -> CpuSet -> Word -> IO Int
 
 -- | Get the last physical CPU where a process ran.
 -- 
@@ -829,10 +917,10 @@ foreign import ccall "hwloc_get_last_cpu_location" getLastCpuLocation' :: Topolo
 -- 
 -- \note On non-Linux systems, ::HWLOC_CPUBIND_THREAD can not be used in \p flags.
 -- 
-getProcLastCpuLocation :: Topology -> Word -< CpuSet -> [CpuBindFlag] -> IO Int
+getProcLastCpuLocation :: Topology -> Word -> CpuSet -> [CpuBindFlag] -> IO Int
 getProcLastCpuLocation topo pid cpuset flags = getProcLastCpuLocation' topo pid cpuset (fromFlags flags)
 
-foreign import ccall "hwloc_get_proc_last_cpu_location" getProcLastCpuLocation' :: Topology -> Word -> CpuSet -> Int -> IO Int
+foreign import ccall "hwloc_get_proc_last_cpu_location" getProcLastCpuLocation' :: Topology -> Word -> CpuSet -> Word -> IO Int
 
 
 -- Memory binding
@@ -992,7 +1080,10 @@ data MemBindFlag
 -- \return -1 with errno set to ENOSYS if the action is not supported
 -- \return -1 with errno set to EXDEV if the binding cannot be enforced
 -- 
-HWLOC_DECLSPEC int hwloc_set_membind_nodeset(hwloc_topology_t topology, hwloc_const_nodeset_t nodeset, hwloc_membind_policy_t policy, int flags);
+setMemBindNodeSet :: Topology -> NodeSet -> MemBindPolicy -> [MemBindFlag] -> IO Int
+setMemBindNodeSet topo ns pol flags = setMemBindNodeSet' topo ns (fromEnum pol) (fromFlags flags)
+
+foreign import ccall "hwloc_set_membind_nodeset" setMemBindNodeSet' :: Topology -> NodeSet -> Int -> Word -> IO Int
 
 -- | Set the default memory binding policy of the current
 -- process or thread to prefer the NUMA node(s) near the specified physical \p
@@ -1007,7 +1098,10 @@ HWLOC_DECLSPEC int hwloc_set_membind_nodeset(hwloc_topology_t topology, hwloc_co
 -- \return -1 with errno set to ENOSYS if the action is not supported
 -- \return -1 with errno set to EXDEV if the binding cannot be enforced
 -- 
-HWLOC_DECLSPEC int hwloc_set_membind(hwloc_topology_t topology, hwloc_const_cpuset_t cpuset, hwloc_membind_policy_t policy, int flags);
+setMemBind :: Topology -> CpuSet -> MemBindPolicy -> [MemBindFlag] -> IO Int
+setMemBind topo cs pol flags = setMemBind' topo cs (fromEnum pol) (fromFlags flags)
+
+foreign import ccall "hwloc_set_membind" setMemBind' :: Topology -> CpuSet -> Int -> Word -> IO Int
 
 -- | Query the default memory binding policy and physical locality of the
 -- current process or thread.
@@ -1049,7 +1143,13 @@ HWLOC_DECLSPEC int hwloc_set_membind(hwloc_topology_t topology, hwloc_const_cpus
 -- If any other flags are specified, -1 is returned and errno is set
 -- to EINVAL.
 -- 
-HWLOC_DECLSPEC int hwloc_get_membind_nodeset(hwloc_topology_t topology, hwloc_nodeset_t nodeset, hwloc_membind_policy_t * policy, int flags);
+getMemBindNodeSet :: Topology -> NodeSet -> [MemBindFlag] -> IO (Int,MemBindPolicy)
+getMemBindNodeSet topo ns flags = alloca $ \ptr -> do
+   r   <- getMemBindNodeSet' topo ns ptr (fromFlags flags)
+   pol <- toEnum <$> peek ptr
+   return (r,pol)
+
+foreign import ccall "hwloc_get_membind_nodeset" getMemBindNodeSet' :: Topology -> NodeSet -> Ptr Int -> Word -> IO Int
 
 -- | Query the default memory binding policy and physical locality of the
 -- current process or thread (the locality is returned in \p cpuset as
@@ -1096,7 +1196,13 @@ HWLOC_DECLSPEC int hwloc_get_membind_nodeset(hwloc_topology_t topology, hwloc_no
 -- If any other flags are specified, -1 is returned and errno is set
 -- to EINVAL.
 -- 
-HWLOC_DECLSPEC int hwloc_get_membind(hwloc_topology_t topology, hwloc_cpuset_t cpuset, hwloc_membind_policy_t * policy, int flags);
+getMemBind :: Topology -> CpuSet -> [MemBindFlag] -> IO (Int,MemBindPolicy)
+getMemBind topo cs flags = alloca $ \ptr -> do
+   r   <- getMemBind' topo cs ptr (fromFlags flags)
+   pol <- toEnum <$> peek ptr
+   return (r,pol)
+
+foreign import ccall "hwloc_get_membind" getMemBind' :: Topology -> CpuSet -> Ptr Int -> Word -> IO Int
 
 -- | Set the default memory binding policy of the specified
 -- process to prefer the NUMA node(s) specified by physical \p nodeset
@@ -1107,7 +1213,10 @@ HWLOC_DECLSPEC int hwloc_get_membind(hwloc_topology_t topology, hwloc_cpuset_t c
 -- \note \p hwloc_pid_t is \p pid_t on Unix platforms,
 -- and \p HANDLE on native Windows platforms.
 -- 
-HWLOC_DECLSPEC int hwloc_set_proc_membind_nodeset(hwloc_topology_t topology, hwloc_pid_t pid, hwloc_const_nodeset_t nodeset, hwloc_membind_policy_t policy, int flags);
+setProcMemBindNodeSet :: Topology -> Word -> NodeSet -> MemBindPolicy -> [MemBindFlag] -> IO Int
+setProcMemBindNodeSet topo pid ns pol flags = setProcMemBindNodeSet' topo pid ns (fromEnum pol) (fromFlags flags)
+
+foreign import ccall "hwloc_set_proc_membind_nodeset" setProcMemBindNodeSet' :: Topology -> Word -> NodeSet -> Int -> Word -> IO Int
 
 -- | Set the default memory binding policy of the specified
 -- process to prefer the NUMA node(s) near the specified physical \p cpuset
@@ -1118,7 +1227,10 @@ HWLOC_DECLSPEC int hwloc_set_proc_membind_nodeset(hwloc_topology_t topology, hwl
 -- \note \p hwloc_pid_t is \p pid_t on Unix platforms,
 -- and \p HANDLE on native Windows platforms.
 -- 
-HWLOC_DECLSPEC int hwloc_set_proc_membind(hwloc_topology_t topology, hwloc_pid_t pid, hwloc_const_cpuset_t cpuset, hwloc_membind_policy_t policy, int flags);
+setProcMemBind :: Topology -> Word -> CpuSet -> MemBindPolicy -> [MemBindFlag] -> IO Int
+setProcMemBind topo pid cs pol flags = setProcMemBind' topo pid cs (fromEnum pol) (fromFlags flags)
+
+foreign import ccall "hwloc_set_proc_membind" setProcMemBind' :: Topology -> Word -> CpuSet -> Int -> Word -> IO Int
 
 -- | Query the default memory binding policy and physical locality of the
 -- specified process.
@@ -1156,7 +1268,13 @@ HWLOC_DECLSPEC int hwloc_set_proc_membind(hwloc_topology_t topology, hwloc_pid_t
 -- \note \p hwloc_pid_t is \p pid_t on Unix platforms,
 -- and \p HANDLE on native Windows platforms.
 -- 
-HWLOC_DECLSPEC int hwloc_get_proc_membind_nodeset(hwloc_topology_t topology, hwloc_pid_t pid, hwloc_nodeset_t nodeset, hwloc_membind_policy_t * policy, int flags);
+getProcMemBindNodeSet :: Topology -> Word -> NodeSet -> [MemBindFlag] -> IO (Int,MemBindPolicy)
+getProcMemBindNodeSet topo pid ns flags = alloca $ \ptr -> do
+   r   <- getProcMemBindNodeSet' topo pid ns ptr (fromFlags flags)
+   pol <- toEnum <$> peek ptr
+   return (r,pol)
+
+foreign import ccall "hwloc_get_proc_membind_nodeset" getProcMemBindNodeSet' :: Topology -> Word -> NodeSet -> Ptr Int -> Word -> IO Int
 
 -- | Query the default memory binding policy and physical locality of the
 -- specified process (the locality is returned in \p cpuset as CPUs
@@ -1197,7 +1315,13 @@ HWLOC_DECLSPEC int hwloc_get_proc_membind_nodeset(hwloc_topology_t topology, hwl
 -- \note \p hwloc_pid_t is \p pid_t on Unix platforms,
 -- and \p HANDLE on native Windows platforms.
 -- 
-HWLOC_DECLSPEC int hwloc_get_proc_membind(hwloc_topology_t topology, hwloc_pid_t pid, hwloc_cpuset_t cpuset, hwloc_membind_policy_t * policy, int flags);
+getProcMemBind :: Topology -> Word -> CpuSet -> [MemBindFlag] -> IO (Int,MemBindPolicy)
+getProcMemBind topo pid cs flags = alloca $ \ptr -> do
+   r   <- getProcMemBind' topo pid cs ptr (fromFlags flags)
+   pol <- toEnum <$> peek ptr
+   return (r,pol)
+
+foreign import ccall "hwloc_get_proc_membind" getProcMemBind' :: Topology -> Word -> CpuSet -> Ptr Int -> Word -> IO Int
 
 -- | Bind the already-allocated memory identified by (addr, len)
 -- to the NUMA node(s) in physical \p nodeset.
@@ -1205,7 +1329,10 @@ HWLOC_DECLSPEC int hwloc_get_proc_membind(hwloc_topology_t topology, hwloc_pid_t
 -- \return -1 with errno set to ENOSYS if the action is not supported
 -- \return -1 with errno set to EXDEV if the binding cannot be enforced
 -- 
-HWLOC_DECLSPEC int hwloc_set_area_membind_nodeset(hwloc_topology_t topology, const void *addr, size_t len, hwloc_const_nodeset_t nodeset, hwloc_membind_policy_t policy, int flags);
+setAreaMemBindNodeSet :: Topology -> Ptr a -> CSize -> NodeSet -> MemBindPolicy -> [MemBindFlag] -> IO Int
+setAreaMemBindNodeSet topo addr len nodeset policy flags = setAreaMemBindNodeSet' topo addr len nodeset (fromEnum policy) (fromFlags flags)
+
+foreign import ccall "hwloc_set_area_membind_nodeset" setAreaMemBindNodeSet' :: Topology -> Ptr a -> CSize -> NodeSet -> Int -> Word -> IO Int
 
 -- | Bind the already-allocated memory identified by (addr, len)
 -- to the NUMA node(s) near physical \p cpuset.
@@ -1213,7 +1340,10 @@ HWLOC_DECLSPEC int hwloc_set_area_membind_nodeset(hwloc_topology_t topology, con
 -- \return -1 with errno set to ENOSYS if the action is not supported
 -- \return -1 with errno set to EXDEV if the binding cannot be enforced
 -- 
-HWLOC_DECLSPEC int hwloc_set_area_membind(hwloc_topology_t topology, const void *addr, size_t len, hwloc_const_cpuset_t cpuset, hwloc_membind_policy_t policy, int flags);
+setAreaMemBind :: Topology -> Ptr a -> CSize -> CpuSet -> MemBindPolicy -> [MemBindFlag] -> IO Int
+setAreaMemBind topo addr len cpuset policy flags = setAreaMemBind' topo addr len cpuset (fromEnum policy) (fromFlags flags)
+
+foreign import ccall "hwloc_set_area_membind" setAreaMemBind' :: Topology -> Ptr a -> CSize -> CpuSet -> Int -> Word -> IO Int
 
 -- | Query the physical NUMA node(s) and binding policy of the memory
 -- identified by (\p addr, \p len ).
@@ -1237,7 +1367,14 @@ HWLOC_DECLSPEC int hwloc_set_area_membind(hwloc_topology_t topology, const void 
 -- If any other flags are specified, -1 is returned and errno is set
 -- to EINVAL.
 -- 
-HWLOC_DECLSPEC int hwloc_get_area_membind_nodeset(hwloc_topology_t topology, const void *addr, size_t len, hwloc_nodeset_t nodeset, hwloc_membind_policy_t * policy, int flags);
+getAreaMemBindNodeSet :: Topology -> Ptr a -> CSize -> NodeSet -> [MemBindFlag] -> IO (Int,MemBindPolicy)
+getAreaMemBindNodeSet topo addr len nodeset flags = alloca $ \ptr -> do
+   r   <- getAreaMemBindNodeSet' topo addr len nodeset ptr (fromFlags flags)
+   pol <- toEnum <$> peek ptr
+   return (r,pol)
+
+foreign import ccall "hwloc_get_area_membind_nodeset" getAreaMemBindNodeSet' :: Topology -> Ptr a -> CSize -> NodeSet -> Ptr Int -> Word -> IO Int
+
 
 -- | Query the CPUs near the physical NUMA node(s) and binding policy of
 -- the memory identified by (\p addr, \p len ).
@@ -1263,7 +1400,13 @@ HWLOC_DECLSPEC int hwloc_get_area_membind_nodeset(hwloc_topology_t topology, con
 -- If any other flags are specified, -1 is returned and errno is set
 -- to EINVAL.
 -- 
-HWLOC_DECLSPEC int hwloc_get_area_membind(hwloc_topology_t topology, const void *addr, size_t len, hwloc_cpuset_t cpuset, hwloc_membind_policy_t * policy, int flags);
+getAreaMemBind :: Topology -> Ptr a -> CSize -> CpuSet -> [MemBindFlag] -> IO (Int,MemBindPolicy)
+getAreaMemBind topo addr len cpuset flags = alloca $ \ptr -> do
+   r   <- getAreaMemBind' topo addr len cpuset ptr (fromFlags flags)
+   pol <- toEnum <$> peek ptr
+   return (r,pol)
+
+foreign import ccall "hwloc_get_area_membind" getAreaMemBind' :: Topology -> Ptr a -> CSize -> CpuSet -> Ptr Int -> Word -> IO Int
 
 -- | Allocate some memory
 -- 
@@ -1272,7 +1415,7 @@ HWLOC_DECLSPEC int hwloc_get_area_membind(hwloc_topology_t topology, const void 
 -- 
 -- \note The allocated memory should be freed with hwloc_free().
 -- 
-HWLOC_DECLSPEC void *hwloc_alloc(hwloc_topology_t topology, size_t len);
+foreign import ccall "hwloc_alloc" alloc :: Topology -> CSize -> IO (Ptr a)
 
 -- | Allocate some memory on the given physical nodeset \p nodeset
 -- 
@@ -1285,7 +1428,10 @@ HWLOC_DECLSPEC void *hwloc_alloc(hwloc_topology_t topology, size_t len);
 -- 
 -- \note The allocated memory should be freed with hwloc_free().
 -- 
-HWLOC_DECLSPEC void *hwloc_alloc_membind_nodeset(hwloc_topology_t topology, size_t len, hwloc_const_nodeset_t nodeset, hwloc_membind_policy_t policy, int flags) __hwloc_attribute_malloc;
+allocMemBindNodeSet :: Topology -> CSize -> NodeSet -> MemBindPolicy -> [MemBindFlag] -> IO (Ptr a)
+allocMemBindNodeSet topo len nodeset pol flags = allocMemBindNodeSet' topo len nodeset (fromEnum pol) (fromFlags flags)
+
+foreign import ccall "hwloc_alloc_membind_nodeset" allocMemBindNodeSet' :: Topology -> CSize -> NodeSet -> Int -> Word -> IO (Ptr a)
 
 -- | Allocate some memory on memory nodes near the given physical cpuset \p cpuset
 -- 
@@ -1298,12 +1444,15 @@ HWLOC_DECLSPEC void *hwloc_alloc_membind_nodeset(hwloc_topology_t topology, size
 -- 
 -- \note The allocated memory should be freed with hwloc_free().
 -- 
-HWLOC_DECLSPEC void *hwloc_alloc_membind(hwloc_topology_t topology, size_t len, hwloc_const_cpuset_t cpuset, hwloc_membind_policy_t policy, int flags) __hwloc_attribute_malloc;
+allocMemBindCpuSet :: Topology -> CSize -> CpuSet -> MemBindPolicy -> [MemBindFlag] -> IO (Ptr a)
+allocMemBindCpuSet topo len cpuset pol flags = allocMemBindCpuSet' topo len cpuset (fromEnum pol) (fromFlags flags)
+
+foreign import ccall "hwloc_alloc_membind_cpuset" allocMemBindCpuSet' :: Topology -> CSize -> CpuSet -> Int -> Word -> IO (Ptr a)
 
 -- | Free memory that was previously allocated by hwloc_alloc()
 -- or hwloc_alloc_membind().
 -- 
-HWLOC_DECLSPEC int hwloc_free(hwloc_topology_t topology, void *addr, size_t len);
+foreign import ccall "hwloc_free" free :: Topology -> Ptr a -> CSize -> IO Int
 
 
 --  Changing the Source of Topology Discovery
@@ -1338,7 +1487,7 @@ HWLOC_DECLSPEC int hwloc_free(hwloc_topology_t topology, void *addr, size_t len)
 -- \note -1 is returned and errno is set to ENOSYS on platforms that do not
 -- support this feature.
 -- 
-HWLOC_DECLSPEC int hwloc_topology_set_pid(hwloc_topology_t __hwloc_restrict topology, hwloc_pid_t pid);
+foreign import ccall "hwloc_set_pid" setPid :: Topology -> Word -> IO Int
 
 -- | Enable synthetic topology.
 -- 
@@ -1368,7 +1517,7 @@ HWLOC_DECLSPEC int hwloc_topology_set_pid(hwloc_topology_t __hwloc_restrict topo
 -- component (if any), but the topology is not actually modified until
 -- hwloc_topology_load().
 -- 
-HWLOC_DECLSPEC int hwloc_topology_set_synthetic(hwloc_topology_t __hwloc_restrict topology, const char * __hwloc_restrict description);
+foreign import ccall "hwloc_set_synthetic" setSynthetic :: Topology -> CString -> IO Int
 
 -- | Enable XML-file based topology.
 -- 
@@ -1396,7 +1545,7 @@ HWLOC_DECLSPEC int hwloc_topology_set_synthetic(hwloc_topology_t __hwloc_restric
 -- component (if any), but the topology is not actually modified until
 -- hwloc_topology_load().
 -- 
-HWLOC_DECLSPEC int hwloc_topology_set_xml(hwloc_topology_t __hwloc_restrict topology, const char * __hwloc_restrict xmlpath);
+foreign import ccall "hwloc_set_xml" setXml :: Topology -> CString -> IO Int
 
 -- | Enable XML based topology using a memory buffer (instead of
 -- a file, as with hwloc_topology_set_xml()).
@@ -1424,7 +1573,7 @@ HWLOC_DECLSPEC int hwloc_topology_set_xml(hwloc_topology_t __hwloc_restrict topo
 -- component (if any), but the topology is not actually modified until
 -- hwloc_topology_load().
 -- 
-HWLOC_DECLSPEC int hwloc_topology_set_xmlbuffer(hwloc_topology_t __hwloc_restrict topology, const char * __hwloc_restrict buffer, int size);
+foreign import ccall "hwloc_set_xml_buffer" setXmlBuffer :: Topology -> CString -> Int -> IO Int
 
 
 
@@ -1509,7 +1658,11 @@ data TopologyFlag
 -- 
 -- The flags set in a topology may be retrieved with hwloc_topology_get_flags()
 -- 
-HWLOC_DECLSPEC int hwloc_topology_set_flags (hwloc_topology_t topology, unsigned long flags);
+setFlags :: Topology -> [TopologyFlag] -> IO Int
+setFlags topo flags = setFlags' topo (fromFlags flags)
+
+foreign import ccall "hwloc_topology_set_flags" setFlags' :: Topology -> Word -> IO Int
+
 
 -- | Get OR'ed flags of a topology.
 -- 
@@ -1517,7 +1670,7 @@ HWLOC_DECLSPEC int hwloc_topology_set_flags (hwloc_topology_t topology, unsigned
 -- 
 -- \return the flags previously set with hwloc_topology_set_flags().
 -- 
-HWLOC_DECLSPEC unsigned long hwloc_topology_get_flags (hwloc_topology_t topology);
+foreign import ccall "hwloc_topology_get_flags" getFlags :: Topology -> IO Word
 
 -- | Does the topology context come from this system?
 -- 
@@ -1526,7 +1679,7 @@ HWLOC_DECLSPEC unsigned long hwloc_topology_get_flags (hwloc_topology_t topology
 -- \return 0 instead (for instance if using another file-system root,
 -- a XML topology file, or a synthetic topology).
 -- 
-HWLOC_DECLSPEC int hwloc_topology_is_thissystem(hwloc_topology_t  __hwloc_restrict topology) __hwloc_attribute_pure;
+foreign import ccall "hwloc_topology_is_thissystem" isThisSystem :: Topology -> IO Int
 
 -- | Flags describing actual discovery support for this topology. */
 data DiscoverySupport = DiscoverySupport
@@ -1583,7 +1736,7 @@ data TopologySupport = TopologySupport
    deriving (Show)
 
 -- | Retrieve the topology support
-HWLOC_DECLSPEC const struct hwloc_topology_support *hwloc_topology_get_support(hwloc_topology_t __hwloc_restrict topology);
+foreign import ccall "hwloc_topology_get_support" getSupport :: Topology -> IO (Ptr TopologySupport)
 
 -- | Ignore an object type.
 -- 
@@ -1594,7 +1747,11 @@ HWLOC_DECLSPEC const struct hwloc_topology_support *hwloc_topology_get_support(h
 -- I/O objects may not be ignored, topology flags should be used to configure
 -- their discovery instead.
 -- 
-HWLOC_DECLSPEC int hwloc_topology_ignore_type(hwloc_topology_t topology, hwloc_obj_type_t type);
+ignoreType :: Topology -> ObjectType -> IO Int
+ignoreType topo typ = ignoreType' topo (fromEnum typ)
+
+foreign import ccall "hwloc_topology_ignore_type" ignoreType' :: Topology -> Int -> IO Int
+
 
 -- | Ignore an object type if it does not bring any structure.
 -- 
@@ -1608,7 +1765,10 @@ HWLOC_DECLSPEC int hwloc_topology_ignore_type(hwloc_topology_t topology, hwloc_o
 -- Misc objects cannot be ignored based on the structure since they are only annotations
 -- outside of the main topology structure.
 -- 
-HWLOC_DECLSPEC int hwloc_topology_ignore_type_keep_structure(hwloc_topology_t topology, hwloc_obj_type_t type);
+foreign import ccall "hwloc_topology_ignore_type_keep_structure" ignoreTypeKeepStructure' :: Topology -> Int -> IO Int
+
+ignoreTypeKeepStructure :: Topology -> ObjectType -> IO Int
+ignoreTypeKeepStructure topo typ = ignoreTypeKeepStructure' topo (fromEnum typ)
 
 -- | Ignore all objects that do not bring any structure.
 -- 
@@ -1616,7 +1776,7 @@ HWLOC_DECLSPEC int hwloc_topology_ignore_type_keep_structure(hwloc_topology_t to
 -- This is equivalent to calling hwloc_topology_ignore_type_keep_structure()
 -- for all object types.
 -- 
-HWLOC_DECLSPEC int hwloc_topology_ignore_all_keep_structure(hwloc_topology_t topology);
+foreign import ccall "hwloc_topology_ignore_all_keep_structure" ignoreAllKeepStructure :: Topology -> IO Int
 
 -- | Provide a distance matrix.
 -- 
@@ -1635,9 +1795,10 @@ HWLOC_DECLSPEC int hwloc_topology_ignore_all_keep_structure(hwloc_topology_t top
 -- 
 -- \note Distance matrices are ignored in multi-node topologies.
 -- 
-HWLOC_DECLSPEC int hwloc_topology_set_distance_matrix(hwloc_topology_t __hwloc_restrict topology,
-                        hwloc_obj_type_t type, unsigned nbobjs,
-                        unsigned *os_index, float *distances);
+foreign import ccall "hwloc_topology_set_distance_matrix" setDistanceMatrix' :: Topology -> Int -> Word -> Ptr Word -> Ptr Float -> IO Int
+
+setDistanceMatrix :: Topology -> ObjectType -> Word -> Ptr Word -> Ptr Float -> IO Int
+setDistanceMatrix topo typ n k v = setDistanceMatrix' topo (fromEnum typ) n k v
 
 -- | Set the topology-specific userdata pointer.
 -- 
@@ -1649,14 +1810,14 @@ HWLOC_DECLSPEC int hwloc_topology_set_distance_matrix(hwloc_topology_t __hwloc_r
 -- 
 -- This pointer is not exported to XML.
 -- 
-HWLOC_DECLSPEC void hwloc_topology_set_userdata(hwloc_topology_t topology, const void *userdata);
+foreign import ccall "hwloc_topology_set_userdata" setUserData :: Topology -> Ptr a -> IO ()
 
 -- | Retrieve the topology-specific userdata pointer.
 -- 
 -- Retrieve the application-given private data pointer that was
 -- previously set with hwloc_topology_set_userdata().
 -- 
-HWLOC_DECLSPEC void * hwloc_topology_get_userdata(hwloc_topology_t topology);
+foreign import ccall "hwloc_topology_get_userdata" getUserData :: Topology -> IO (Ptr a)
 
 
 
@@ -1693,7 +1854,7 @@ data RestrictFlag
 -- The topology is reinitialized in this case. It should be either
 -- destroyed with hwloc_topology_destroy() or configured and loaded again.
 -- 
-HWLOC_DECLSPEC int hwloc_topology_restrict(hwloc_topology_t __hwloc_restrict topology, hwloc_const_cpuset_t cpuset, unsigned long flags);
+foreign import ccall "hwloc_topology_restrict" restrict :: Topology -> CpuSet -> Word -> IO (Ptr a)
 
 -- | Add a MISC object as a leaf of the topology
 -- 
@@ -1710,7 +1871,7 @@ HWLOC_DECLSPEC int hwloc_topology_restrict(hwloc_topology_t __hwloc_restrict top
 -- \note If \p name contains some non-printable characters, they will
 -- be dropped when exporting to XML, see hwloc_topology_export_xml() in hwloc/export.h.
 -- 
-HWLOC_DECLSPEC hwloc_obj_t hwloc_topology_insert_misc_object(hwloc_topology_t topology, hwloc_obj_t parent, const char *name);
+foreign import ccall "hwloc_topology_insert_misc_object" insertMiscObject :: Topology -> Ptr Object -> CString -> IO (Ptr Object)
 
 -- | Allocate a Group object to insert later with hwloc_topology_insert_group_object().
 -- 
@@ -1728,7 +1889,7 @@ HWLOC_DECLSPEC hwloc_obj_t hwloc_topology_insert_misc_object(hwloc_topology_t to
 -- The object will be destroyed if passed to hwloc_topology_insert_group_object()
 -- without any set defined.
 -- 
-HWLOC_DECLSPEC hwloc_obj_t hwloc_topology_alloc_group_object(hwloc_topology_t topology);
+foreign import ccall "hwloc_topology_alloc_group_object" allocGroupObject :: Topology -> IO (Ptr Object)
 
 -- | Add more structure to the topology by adding an intermediate Group
 -- 
@@ -1756,7 +1917,7 @@ HWLOC_DECLSPEC hwloc_obj_t hwloc_topology_alloc_group_object(hwloc_topology_t to
 -- \return \c NULL if the object was discarded because no set was initialized in the Group
 -- before insert, or all of them were empty.
 -- 
-HWLOC_DECLSPEC hwloc_obj_t hwloc_topology_insert_group_object(hwloc_topology_t topology, hwloc_obj_t group);
+foreign import ccall "hwloc_topology_insert_group_object" insertGroupObject :: Topology -> Ptr Object -> IO (Ptr Object)
 
 -- | Setup object cpusets/nodesets by OR'ing another object's sets.
 -- 
@@ -1767,5 +1928,5 @@ HWLOC_DECLSPEC hwloc_obj_t hwloc_topology_insert_group_object(hwloc_topology_t t
 -- and hwloc_topology_insert_group_object(). It builds the sets of the new Group
 -- that will be inserted as a new intermediate parent of several objects.
 -- 
-HWLOC_DECLSPEC int hwloc_obj_add_other_obj_sets(hwloc_obj_t dst, hwloc_obj_t src);
+foreign import ccall "hwloc_obj_add_other_obj_sets" addSetsFromOtherObject :: Ptr Object -> Ptr Object -> IO Int
 

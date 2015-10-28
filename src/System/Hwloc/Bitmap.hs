@@ -1,6 +1,6 @@
 {-# LANGUAGE ForeignFunctionInterface #-}
 module System.Hwloc.Bitmap
-   ( Bitmap
+   ( Bitmap (..)
    , allocate
    , allocateFull
    , free
@@ -56,7 +56,7 @@ import Foreign.C.Types (CSize(..))
 import Foreign.C.String (CString)
 import Data.Word
 
-newtype Bitmap = Bitmap (Ptr ())
+newtype Bitmap = Bitmap (Ptr ()) deriving (Show)
 
 -- | Allocate a new empty bitmap
 -- 
