@@ -54,7 +54,7 @@ module System.Hwloc
    , getAreaMemBind
    , alloc
    , allocMemBindNodeSet
-   , allocMemBindCpuSet
+   , allocMemBind
    , free
    , setPid
    , setSynthetic
@@ -77,10 +77,11 @@ module System.Hwloc
    , getUserData
    , RestrictFlag (..)
    , restrict
-   , insertMiscObject
-   , allocGroupObject
-   , insertGroupObject
-   , addSetsFromOtherObject
+--   , insertMiscObject
+--   , allocGroupObject
+--   , insertGroupObject
+--   , addSetsFromOtherObject
+   , getObject
    )
 where
 
@@ -1444,10 +1445,10 @@ foreign import ccall "hwloc_alloc_membind_nodeset" allocMemBindNodeSet' :: Topol
 -- 
 -- \note The allocated memory should be freed with hwloc_free().
 -- 
-allocMemBindCpuSet :: Topology -> CSize -> CpuSet -> MemBindPolicy -> [MemBindFlag] -> IO (Ptr a)
-allocMemBindCpuSet topo len cpuset pol flags = allocMemBindCpuSet' topo len cpuset (fromEnum pol) (fromFlags flags)
+allocMemBind :: Topology -> CSize -> CpuSet -> MemBindPolicy -> [MemBindFlag] -> IO (Ptr a)
+allocMemBind topo len cpuset pol flags = allocMemBind' topo len cpuset (fromEnum pol) (fromFlags flags)
 
-foreign import ccall "hwloc_alloc_membind_cpuset" allocMemBindCpuSet' :: Topology -> CSize -> CpuSet -> Int -> Word -> IO (Ptr a)
+foreign import ccall "hwloc_alloc_membind" allocMemBind' :: Topology -> CSize -> CpuSet -> Int -> Word -> IO (Ptr a)
 
 -- | Free memory that was previously allocated by hwloc_alloc()
 -- or hwloc_alloc_membind().
@@ -1487,7 +1488,7 @@ foreign import ccall "hwloc_free" free :: Topology -> Ptr a -> CSize -> IO Int
 -- \note -1 is returned and errno is set to ENOSYS on platforms that do not
 -- support this feature.
 -- 
-foreign import ccall "hwloc_set_pid" setPid :: Topology -> Word -> IO Int
+foreign import ccall "hwloc_topology_set_pid" setPid :: Topology -> Word -> IO Int
 
 -- | Enable synthetic topology.
 -- 
@@ -1517,7 +1518,7 @@ foreign import ccall "hwloc_set_pid" setPid :: Topology -> Word -> IO Int
 -- component (if any), but the topology is not actually modified until
 -- hwloc_topology_load().
 -- 
-foreign import ccall "hwloc_set_synthetic" setSynthetic :: Topology -> CString -> IO Int
+foreign import ccall "hwloc_topology_set_synthetic" setSynthetic :: Topology -> CString -> IO Int
 
 -- | Enable XML-file based topology.
 -- 
@@ -1545,7 +1546,7 @@ foreign import ccall "hwloc_set_synthetic" setSynthetic :: Topology -> CString -
 -- component (if any), but the topology is not actually modified until
 -- hwloc_topology_load().
 -- 
-foreign import ccall "hwloc_set_xml" setXml :: Topology -> CString -> IO Int
+foreign import ccall "hwloc_topology_set_xml" setXml :: Topology -> CString -> IO Int
 
 -- | Enable XML based topology using a memory buffer (instead of
 -- a file, as with hwloc_topology_set_xml()).
@@ -1573,7 +1574,7 @@ foreign import ccall "hwloc_set_xml" setXml :: Topology -> CString -> IO Int
 -- component (if any), but the topology is not actually modified until
 -- hwloc_topology_load().
 -- 
-foreign import ccall "hwloc_set_xml_buffer" setXmlBuffer :: Topology -> CString -> Int -> IO Int
+foreign import ccall "hwloc_topology_set_xmlbuffer" setXmlBuffer :: Topology -> CString -> Int -> IO Int
 
 
 
@@ -1871,7 +1872,7 @@ foreign import ccall "hwloc_topology_restrict" restrict :: Topology -> CpuSet ->
 -- \note If \p name contains some non-printable characters, they will
 -- be dropped when exporting to XML, see hwloc_topology_export_xml() in hwloc/export.h.
 -- 
-foreign import ccall "hwloc_topology_insert_misc_object" insertMiscObject :: Topology -> Ptr Object -> CString -> IO (Ptr Object)
+--foreign import ccall "hwloc_topology_insert_misc_object" insertMiscObject :: Topology -> Ptr Object -> CString -> IO (Ptr Object)
 
 -- | Allocate a Group object to insert later with hwloc_topology_insert_group_object().
 -- 
@@ -1889,7 +1890,7 @@ foreign import ccall "hwloc_topology_insert_misc_object" insertMiscObject :: Top
 -- The object will be destroyed if passed to hwloc_topology_insert_group_object()
 -- without any set defined.
 -- 
-foreign import ccall "hwloc_topology_alloc_group_object" allocGroupObject :: Topology -> IO (Ptr Object)
+--foreign import ccall "hwloc_topology_alloc_group_object" allocGroupObject :: Topology -> IO (Ptr Object)
 
 -- | Add more structure to the topology by adding an intermediate Group
 -- 
@@ -1917,7 +1918,7 @@ foreign import ccall "hwloc_topology_alloc_group_object" allocGroupObject :: Top
 -- \return \c NULL if the object was discarded because no set was initialized in the Group
 -- before insert, or all of them were empty.
 -- 
-foreign import ccall "hwloc_topology_insert_group_object" insertGroupObject :: Topology -> Ptr Object -> IO (Ptr Object)
+--foreign import ccall "hwloc_topology_insert_group_object" insertGroupObject :: Topology -> Ptr Object -> IO (Ptr Object)
 
 -- | Setup object cpusets/nodesets by OR'ing another object's sets.
 -- 
@@ -1928,5 +1929,7 @@ foreign import ccall "hwloc_topology_insert_group_object" insertGroupObject :: T
 -- and hwloc_topology_insert_group_object(). It builds the sets of the new Group
 -- that will be inserted as a new intermediate parent of several objects.
 -- 
-foreign import ccall "hwloc_obj_add_other_obj_sets" addSetsFromOtherObject :: Ptr Object -> Ptr Object -> IO Int
+--foreign import ccall "hwloc_obj_add_other_obj_sets" addSetsFromOtherObject :: Ptr Object -> Ptr Object -> IO Int
 
+-- | Returns the topology object at logical index \p idx from depth \p depth
+foreign import ccall "hwloc_get_obj_by_depth" getObject :: Topology -> Word -> Word -> IO (Ptr Object)

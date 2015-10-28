@@ -18,12 +18,25 @@ library
       ,  System.Hwloc.Bitmap
   -- other-modules:       
   -- other-extensions:    
-  hs-source-dirs:      src
+  hs-source-dirs:      src/lib
   default-language:    Haskell2010
   ghc-options: -Wall -O3 -threaded
+
+  pkgconfig-depends:
+      hwloc
+
   build-depends:       
-      base                    >=4.8       && < 4.9
+      base                    >= 4.8      && < 4.9
    ,  c-storable-deriving     >= 0.1.2    && < 0.2
    ,  vector                  >= 0.11     && < 0.12
    ,  containers              >= 0.5      && < 0.6
    ,  text                    >= 1.2      && < 1.3
+
+executable HwLoc
+   main-is:             HwLoc.hs
+   hs-source-dirs:      src/apps
+   ghc-options:         -Wall -threaded -O3
+   default-language:    Haskell2010
+   build-depends: 
+         base
+      ,  haskell-hwloc
