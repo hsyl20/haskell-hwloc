@@ -4,18 +4,24 @@ module Main where
 
 import System.Hwloc
 import Numeric (showHex)
+import Data.Tree
+import Control.Monad
 
 main :: IO ()
 main = do
-   putStrLn $ "Using HWLOC version " ++ show (showHex getApiVersion "")
+   putStrLn $ "Using HWLOC version " ++ showHex getApiVersion ""
 
    Just topo <- initTopology
 
    _ <- loadTopology topo
 
-   rootPtr <- getObject topo 0 0
+   root <- getObject topo 0 0
+   tree <- buildTree root
 
-   putStrLn (show rootPtr)
+   putStrLn . drawTree . fmap (show . objectType) $ tree
 
-   root <- peekObject rootPtr
-   putStrLn (show root)
+   putStrLn . drawTree . fmap show $ tree
+
+buildTree :: Object -> IO (Tree Object)
+buildTree root = do
+   Node root <$> forM (objectChildren root) (buildTree <=< peekObject)

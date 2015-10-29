@@ -499,7 +499,7 @@ instance Storable Info where
 
 peekObject :: Ptr Object -> IO Object
 peekObject ptr = do
-   typ     <- peekByteOff ptr 0
+   typ     <- toEnum . fromIntegral <$> (peekByteOff ptr 0 :: IO Word32)
    osindex <- peekByteOff ptr 4
    nameptr <- peekByteOff ptr 8
    name    <- if nameptr == nullPtr
@@ -509,7 +509,7 @@ peekObject ptr = do
    ptrattr <- peekByteOff ptr 48  :: IO (Ptr ())
 
    -- TODO: read attributes
-   --case toEnum typ of
+   --case typ of
    --   ObjectTypeSystem     ->
    --   ObjectTypeMachine    ->  
    --   ObjectTypeNumaNode   ->  
@@ -578,7 +578,7 @@ peekObject ptr = do
 
 
    return $ Object 
-      (toEnum typ)
+      typ
       osindex
       name
       memobj
@@ -2062,4 +2062,8 @@ foreign import ccall "hwloc_topology_restrict" restrict :: Topology -> CpuSet ->
 --foreign import ccall "hwloc_obj_add_other_obj_sets" addSetsFromOtherObject :: Ptr Object -> Ptr Object -> IO Int
 
 -- | Returns the topology object at logical index \p idx from depth \p depth
-foreign import ccall "hwloc_get_obj_by_depth" getObject :: Topology -> Word -> Word -> IO (Ptr Object)
+foreign import ccall "hwloc_get_obj_by_depth" getObject' :: Topology -> Word -> Word -> IO (Ptr Object)
+
+getObject :: Topology -> Word -> Word -> IO Object
+getObject topo depth idx = peekObject =<< getObject' topo depth idx
+

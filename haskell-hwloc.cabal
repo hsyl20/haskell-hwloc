@@ -39,3 +39,4 @@ executable HwLoc
    build-depends: 
          base
       ,  haskell-hwloc
+      ,  containers           >= 0.5      && < 0.6
