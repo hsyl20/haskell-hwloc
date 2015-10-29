@@ -1,5 +1,6 @@
 {-# LANGUAGE ForeignFunctionInterface #-}
 {-# LANGUAGE DeriveGeneric #-}
+{-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 module System.Hwloc
    ( getApiVersion
@@ -82,19 +83,21 @@ module System.Hwloc
 --   , insertGroupObject
 --   , addSetsFromOtherObject
    , getObject
+   , peekObject
    )
 where
 
 import Data.Word
+import Data.Int
 import Data.Bits
 import Data.Vector
-import Data.Map
-import Data.Text (Text)
+import Data.Map (Map)
+import qualified Data.Map as Map
 
 import Foreign.Storable
 import Foreign.Ptr
 import Foreign.C.Types (CSize(..))
-import Foreign.C.String (CString)
+import Foreign.C.String (CString, peekCString)
 import Foreign.CStorable
 import Foreign.Marshal.Array
 import Foreign.Marshal.Alloc (alloca)
@@ -132,7 +135,7 @@ foreign import ccall "hwloc_get_api_version" getApiVersion :: Word
 -- Each bit may be converted into a PU object using
 -- hwloc_get_pu_obj_by_os_index().
 -- 
-newtype CpuSet = CpuSet Bitmap deriving (Show)
+newtype CpuSet = CpuSet Bitmap deriving (Show,Storable)
 
 -- | A node set is a bitmap whose bits are set according to NUMA
 -- memory node physical OS indexes.
@@ -147,7 +150,7 @@ newtype CpuSet = CpuSet Bitmap deriving (Show)
 -- 
 -- See also \ref hwlocality_helper_nodeset_convert.
 -- 
-newtype NodeSet = NodeSet Bitmap deriving (Show)
+newtype NodeSet = NodeSet Bitmap deriving (Show,Storable)
 
 
 
@@ -318,10 +321,12 @@ data MemoryObject = MemoryObject
    }
    deriving (Show)
 
+roundTo :: Int -> Int -> Int
+roundTo x y = x + (y - (x `mod` y))
 
 instance Storable MemoryObject where
    alignment _ = 8
-   sizeOf    _ = 16 + sizeOf (undefined :: Word) + sizeOf (undefined :: Ptr ())
+   sizeOf    _ = (16 + sizeOf (undefined :: Word32) + sizeOf (undefined :: Ptr ())) `roundTo` 8
    peek ptr    = do
       ts <- peekByteOff ptr 0
       ls <- peekByteOff ptr 8
@@ -340,21 +345,21 @@ instance Storable MemoryObject where
 -- 
 data Object = Object
    { objectType      :: ObjectType        -- ^ Type of object
-   , objectOsIndex   :: Word              -- ^ OS-provided physical index number.
+   , objectOsIndex   :: Word32            -- ^ OS-provided physical index number.
                                           -- It is not guaranteed unique across the entire machine,
                                           -- except for PUs and NUMA nodes.
 
    , objectName      :: String            -- ^ Object description if any
    , objectMemory    :: MemoryObject      -- ^ Memory attributes
 
-   , objectAttribute :: Attribute         -- ^ Object type-specific Attributes,
+   , objectAttribute :: Maybe Attribute   -- ^ Object type-specific Attributes,
 
-   , objectDepth     :: Word              -- ^ Vertical index in the hierarchy.
+   , objectDepth     :: Word32            -- ^ Vertical index in the hierarchy.
                                           -- If the topology is symmetric, this is equal to the
                                           -- parent depth plus one, and also equal to the number
                                           -- of parent/child links from the root object to here.
 
-   , objectLogicalIndex :: Word           -- ^ Horizontal index in the whole list of similar objects,
+   , objectLogicalIndex :: Word32         -- ^ Horizontal index in the whole list of similar objects,
                                           -- hence guaranteed unique across the entire machine.
                                           -- Could be a "cousin_rank" since it's the rank within the "cousin" list below
 
@@ -362,24 +367,26 @@ data Object = Object
    , objectPreviousCousin :: Ptr Object   -- ^ Previous object of same type and depth
 
    , objectParent :: Ptr Object           -- ^ Parent, \c NULL if root (system object)
-   , objectSiblingRank :: Word            -- ^ Index in parent's \c children[]
+   , objectSiblingRank :: Word32          -- ^ Index in parent's \c children[]
                                           -- array. Or the index in parent's I/O or Misc children list
   
    , objectNextSibling :: Ptr Object      -- ^ Next object below the same parent
    , objectPreviousSibling :: Ptr Object  -- ^ Previous object below the same parent
 
-   , objectChildren :: Vector (Ptr Object) -- ^ Children
+   , objectChildren :: [Ptr Object]       -- ^ Children
    
-   , objectSymetricSubTree :: Int         -- ^ Set if the subtree of normal objects below this object is symmetric,
+   , objectSymetricSubTree :: Int32       -- ^ Set if the subtree of normal objects below this object is symmetric,
                                           -- which means all children and their children have identical subtrees.
                                           -- I/O and Misc children are ignored.
                                           -- 
                                           -- If set in the topology root object, lstopo may export the topology
                                           -- as a synthetic string.
 
-   , objectIOChildren :: Vector (Ptr Object) -- ^ IO children
+   , objectIOArity :: Word32
+   , objectIOFirstChild :: Ptr Object     -- ^ IO first child
 
-   , objectMiscChildren :: Vector (Ptr Object)  -- ^ Mist children
+   , objectMiscArity :: Word32
+   , objectMiscChildren :: Ptr Object     -- ^ Mist first child
 
    , objectCpuSet :: CpuSet               -- ^ CPUs covered by this object
                                           -- 
@@ -468,8 +475,8 @@ data Object = Object
                                           -- 
                                           -- Its value must not be changed, hwloc_bitmap_dup() must be used instead.
 
-   , objectDistances :: Vector Distance   -- ^ Distances between all objects at same depth below this object
-   , objectInfo      :: Map Text Text     -- ^ Array of stringified info type=name
+   , objectDistances :: [Ptr Distance]    -- ^ Distances between all objects at same depth below this object
+   , objectInfo      :: Map String String -- ^ Array of stringified info type=name
 
    , objectUserData :: Ptr ()             -- ^ Application-given private data pointer,
                                           -- initialized to \c NULL, use it as you wish.
@@ -477,6 +484,129 @@ data Object = Object
                                           -- if you wish to export this field to XML. */
    }
    deriving (Show)
+
+data Info = Info String String
+
+instance Storable Info where
+   alignment _ = 8
+   sizeOf _    = 2 * sizeOf (undefined :: Ptr ())
+   poke        = undefined
+   peek ptr    = do
+      nptr <- peekByteOff ptr 0
+      vptr <- peekByteOff ptr (sizeOf (undefined :: Ptr ()))
+      Info <$> peekCString nptr <*> peekCString vptr
+
+
+peekObject :: Ptr Object -> IO Object
+peekObject ptr = do
+   typ     <- peekByteOff ptr 0
+   osindex <- peekByteOff ptr 4
+   nameptr <- peekByteOff ptr 8
+   name    <- if nameptr == nullPtr
+                  then return ""
+                  else peekCString nameptr
+   memobj  <- peekByteOff ptr 16
+   ptrattr <- peekByteOff ptr 48  :: IO (Ptr ())
+
+   -- TODO: read attributes
+   --case toEnum typ of
+   --   ObjectTypeSystem     ->
+   --   ObjectTypeMachine    ->  
+   --   ObjectTypeNumaNode   ->  
+   --   ObjectTypePackage    ->  
+   --   ObjectTypeCore       ->  
+   --   ObjectTypePU         ->  
+   --   ObjectTypeCacheL1    ->  
+   --   ObjectTypeCacheL2    ->  
+   --   ObjectTypeCacheL3    ->  
+   --   ObjectTypeCacheL4    ->  
+   --   ObjectTypeCacheL5    ->  
+   --   ObjectTypeICacheL1   ->  
+   --   ObjectTypeICacheL2   ->  
+   --   ObjectTypeICacheL3   ->  
+   --   ObjectTypeGroup      ->  
+   --   ObjectTypeMisc       ->  
+   --   ObjectTypeBridge     ->  
+   --   ObjectTypePCIDevice  ->  
+   --   ObjectTypeOSDevice   ->  
+   let attr = Nothing
+      
+
+   depth    <- peekByteOff ptr 56
+   logindex <- peekByteOff ptr 60
+
+   nextcousin  <- peekByteOff ptr 64
+   prevcousin  <- peekByteOff ptr 72
+   parent      <- peekByteOff ptr 80
+   sibrank     <- peekByteOff ptr 88
+   nextsibling <- peekByteOff ptr 96
+   prevsibling <- peekByteOff ptr 104
+
+   arity       <- peekByteOff ptr 112
+   childrenPtr <- peekByteOff ptr 120
+   children    <- peekArray arity childrenPtr
+   -- skip first child and last child
+   -- firstchild <- peekByteOff ptr 128
+   -- lastchild  <- peekByteOff ptr 136
+
+   symsub  <- peekByteOff ptr 144
+   ioarity <- peekByteOff ptr 148
+   iofchild <- peekByteOff ptr 152
+
+   miscarity <- peekByteOff ptr 160
+   miscfchild <- peekByteOff ptr 168
+
+   cpuset    <- peekByteOff ptr 176
+   ccpuset   <- peekByteOff ptr 184
+   acpuset   <- peekByteOff ptr 192
+   nodeset   <- peekByteOff ptr 200
+   cnodeset  <- peekByteOff ptr 208
+   anodeset  <- peekByteOff ptr 216
+
+   distPtr   <- peekByteOff ptr 224
+   distCount <- peekByteOff ptr 232
+   distances <- peekArray distCount distPtr
+
+   infoPtr   <- peekByteOff ptr 240
+   infoCount <- peekByteOff ptr 248
+
+   let f (Info x y) = (x,y)
+   infos     <- Map.fromList . fmap f <$> peekArray infoCount infoPtr
+
+   userdata <- peekByteOff ptr 256
+
+
+
+   return $ Object 
+      (toEnum typ)
+      osindex
+      name
+      memobj
+      attr
+      depth
+      logindex
+      prevcousin
+      nextcousin
+      parent
+      sibrank
+      nextsibling
+      prevsibling
+      children
+      symsub
+      ioarity
+      iofchild
+      miscarity
+      miscfchild
+      cpuset
+      ccpuset
+      acpuset
+      nodeset
+      cnodeset
+      anodeset
+      distances
+      infos
+      userdata
+
 
 -- | Cache-specific Object Attributes
 data CacheAttribute = CacheAttribute

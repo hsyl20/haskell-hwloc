@@ -13,6 +13,9 @@ main = do
 
    _ <- loadTopology topo
 
-   root <- getObject topo 0 0
+   rootPtr <- getObject topo 0 0
 
+   putStrLn (show rootPtr)
+
+   root <- peekObject rootPtr
    putStrLn (show root)

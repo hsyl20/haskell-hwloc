@@ -1,4 +1,5 @@
 {-# LANGUAGE ForeignFunctionInterface #-}
+{-# LANGUAGE GeneralizedNewtypeDeriving #-}
 module System.Hwloc.Bitmap
    ( Bitmap (..)
    , allocate
@@ -51,12 +52,13 @@ where
 
 import Prelude hiding (null, compare, negate)
 
+import Foreign.Storable
 import Foreign.Ptr
 import Foreign.C.Types (CSize(..))
 import Foreign.C.String (CString)
 import Data.Word
 
-newtype Bitmap = Bitmap (Ptr ()) deriving (Show)
+newtype Bitmap = Bitmap (Ptr ()) deriving (Show,Storable)
 
 -- | Allocate a new empty bitmap
 -- 
