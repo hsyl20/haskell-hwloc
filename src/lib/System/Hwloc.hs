@@ -250,11 +250,24 @@ data CacheType
                            -- Only used when the ::HWLOC_TOPOLOGY_FLAG_ICACHES topology flag is set
    deriving (Show,Eq,Enum)
 
+instance CStorable CacheType where
+   cAlignment _ = 4
+   cSizeOf    _ = 4
+   cPeek ptr    = toEnum . fromIntegral <$> (peek (castPtr ptr) :: IO Word32)
+   cPoke        = undefined
+
+
 -- | Type of one side (upstream or downstream) of an I/O bridge
 data BridgeType
    = BridgeTypeHost        -- ^ Host-side of a bridge, only possible upstream
    | BridgeTypePCI         -- ^ PCI-side of a bridge
    deriving (Show,Eq,Enum)
+
+instance CStorable BridgeType where
+   cAlignment _ = 4
+   cSizeOf    _ = 4
+   cPeek ptr    = toEnum . fromIntegral <$> (peek (castPtr ptr) :: IO Word32)
+   cPoke        = undefined
 
 -- | Type of a OS device
 data OSDeviceType
@@ -269,6 +282,12 @@ data OSDeviceType
                               -- "opencl0d0" for a OpenCL device,
                               -- "cuda0" for a CUDA device. */
    deriving (Show,Eq,Enum)
+
+instance CStorable OSDeviceType where
+   cAlignment _ = 4
+   cSizeOf    _ = 4
+   cPeek ptr    = toEnum . fromIntegral <$> (peek (castPtr ptr) :: IO Word32)
+   cPoke        = undefined
 
 -- | Compare the depth of two object types
 -- 
@@ -508,28 +527,26 @@ peekObject ptr = do
    memobj  <- peekByteOff ptr 16
    ptrattr <- peekByteOff ptr 48  :: IO (Ptr ())
 
-   -- TODO: read attributes
-   --case typ of
-   --   ObjectTypeSystem     ->
-   --   ObjectTypeMachine    ->  
-   --   ObjectTypeNumaNode   ->  
-   --   ObjectTypePackage    ->  
-   --   ObjectTypeCore       ->  
-   --   ObjectTypePU         ->  
-   --   ObjectTypeCacheL1    ->  
-   --   ObjectTypeCacheL2    ->  
-   --   ObjectTypeCacheL3    ->  
-   --   ObjectTypeCacheL4    ->  
-   --   ObjectTypeCacheL5    ->  
-   --   ObjectTypeICacheL1   ->  
-   --   ObjectTypeICacheL2   ->  
-   --   ObjectTypeICacheL3   ->  
-   --   ObjectTypeGroup      ->  
-   --   ObjectTypeMisc       ->  
-   --   ObjectTypeBridge     ->  
-   --   ObjectTypePCIDevice  ->  
-   --   ObjectTypeOSDevice   ->  
-   let attr = Nothing
+   attr <- case typ of
+      ObjectTypeSystem     -> return Nothing
+      ObjectTypeMachine    -> return Nothing
+      ObjectTypeNumaNode   -> return Nothing
+      ObjectTypePackage    -> return Nothing
+      ObjectTypeCore       -> return Nothing
+      ObjectTypePU         -> return Nothing
+      ObjectTypeCacheL1    -> Just . AttributeCache     <$> peek (castPtr ptrattr)
+      ObjectTypeCacheL2    -> Just . AttributeCache     <$> peek (castPtr ptrattr)
+      ObjectTypeCacheL3    -> Just . AttributeCache     <$> peek (castPtr ptrattr)
+      ObjectTypeCacheL4    -> Just . AttributeCache     <$> peek (castPtr ptrattr)
+      ObjectTypeCacheL5    -> Just . AttributeCache     <$> peek (castPtr ptrattr)
+      ObjectTypeICacheL1   -> Just . AttributeCache     <$> peek (castPtr ptrattr)
+      ObjectTypeICacheL2   -> Just . AttributeCache     <$> peek (castPtr ptrattr)
+      ObjectTypeICacheL3   -> Just . AttributeCache     <$> peek (castPtr ptrattr)
+      ObjectTypeGroup      -> Just . AttributeGroup     <$> peek (castPtr ptrattr)
+      ObjectTypeMisc       -> return Nothing
+      ObjectTypeBridge     -> Just . AttributeBridge    <$> peek (castPtr ptrattr)
+      ObjectTypePCIDevice  -> Just . AttributePCIDevice <$> peek (castPtr ptrattr)
+      ObjectTypeOSDevice   -> Just . AttributeOsDevice  <$> peek (castPtr ptrattr)
       
 
    depth    <- peekByteOff ptr 56
@@ -611,18 +628,33 @@ peekObject ptr = do
 -- | Cache-specific Object Attributes
 data CacheAttribute = CacheAttribute
    { cacheAttributeSize          :: Word64   -- ^ Size of cache in bytes
-   , cacheAttributeDepth         :: Word     -- ^ Depth of cache (e.g., L1, L2, ...etc.)
-   , cacheAttributeLineSize      :: Word     -- ^ Cache-line size in bytes. 0 if unknown
-   , cacheAttributeAssociativity :: Int      -- ^ Ways of associativity, -1 if fully associative, 0 if unknown
+   , cacheAttributeDepth         :: Word32   -- ^ Depth of cache (e.g., L1, L2, ...etc.)
+   , cacheAttributeLineSize      :: Word32   -- ^ Cache-line size in bytes. 0 if unknown
+   , cacheAttributeAssociativity :: Int32    -- ^ Ways of associativity, -1 if fully associative, 0 if unknown
    , cacheAttributeType          :: CacheType -- ^ Cache type
    }
-   deriving (Show)
+   deriving (Show,Generic)
+
+instance CStorable CacheAttribute
+instance Storable CacheAttribute where
+   alignment = cAlignment
+   sizeOf    = cSizeOf
+   peek      = cPeek
+   poke      = cPoke
    
+
 -- | Group-specific Object Attributes
 data GroupAttribute = GroupAttribute
-   { groupAttributeDepth         :: Word     -- ^ Depth of group object
+   { groupAttributeDepth         :: Word32     -- ^ Depth of group object
    }
-   deriving (Show)
+   deriving (Show,Generic)
+
+instance CStorable GroupAttribute
+instance Storable GroupAttribute where
+   alignment = cAlignment
+   sizeOf    = cSizeOf
+   peek      = cPeek
+   poke      = cPoke
 
 -- | PCI Device specific Object Attributes
 data PCIDeviceAttribute = PCIDeviceAttribute
@@ -638,7 +670,14 @@ data PCIDeviceAttribute = PCIDeviceAttribute
    , pciDeviceAttributeRevision     :: Word8
    , pciDeviceAttributeLinkSpeed    :: Float    -- ^ in GB/s
    }
-   deriving (Show)
+   deriving (Show,Generic)
+
+instance CStorable PCIDeviceAttribute
+instance Storable PCIDeviceAttribute where
+   alignment = cAlignment
+   sizeOf    = cSizeOf
+   peek      = cPeek
+   poke      = cPoke
 
 -- | Bridge specific Object Attributes
 data BridgeAttribute = BridgeAttribute
@@ -648,15 +687,29 @@ data BridgeAttribute = BridgeAttribute
    , bridgeAttributeDownstreamPCISecondaryBus   :: Word8
    , bridgeAttributeDownstreamPCISubordinateBus :: Word8
    , bridgeAttributeDownstreamType              :: BridgeType
-   , bridgeAttributeDepth                       :: Word
+   , bridgeAttributeDepth                       :: Word32
    }
-   deriving (Show)
+   deriving (Show,Generic)
+
+instance CStorable BridgeAttribute
+instance Storable BridgeAttribute where
+   alignment = cAlignment
+   sizeOf    = cSizeOf
+   peek      = cPeek
+   poke      = cPoke
 
 -- | OS Device specific Object Attributes
 data OSDeviceAttribute = OSDeviceAttribute
    { osDeviceAttributeType :: OSDeviceType
    }
-   deriving (Show)
+   deriving (Show,Generic)
+
+instance CStorable OSDeviceAttribute
+instance Storable OSDeviceAttribute where
+   alignment = cAlignment
+   sizeOf    = cSizeOf
+   peek      = cPeek
+   poke      = cPoke
 
 -- | Object type-specific Attributes
 data Attribute
