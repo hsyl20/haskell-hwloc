@@ -91,6 +91,7 @@ import Data.Word
 import Data.Int
 import Data.Bits
 import Data.Vector
+import qualified Data.Vector as Vector
 import Data.Map (Map)
 import qualified Data.Map as Map
 
@@ -137,6 +138,12 @@ foreign import ccall "hwloc_get_api_version" getApiVersion :: Word
 -- 
 newtype CpuSet = CpuSet Bitmap deriving (Show,Storable)
 
+instance CStorable CpuSet where
+   cAlignment = alignment
+   cSizeOf    = sizeOf
+   cPeek      = peek
+   cPoke      = poke
+
 -- | A node set is a bitmap whose bits are set according to NUMA
 -- memory node physical OS indexes.
 -- 
@@ -152,6 +159,11 @@ newtype CpuSet = CpuSet Bitmap deriving (Show,Storable)
 -- 
 newtype NodeSet = NodeSet Bitmap deriving (Show,Storable)
 
+instance CStorable NodeSet where
+   cAlignment = alignment
+   cSizeOf    = sizeOf
+   cPeek      = peek
+   cPoke      = poke
 
 
 -- | Type of topology object.
@@ -340,22 +352,30 @@ data MemoryObject = MemoryObject
    }
    deriving (Show)
 
-roundTo :: Int -> Int -> Int
-roundTo x y = x + (y - (x `mod` y))
+data MemoryObjectT = MemoryObjectT Word64 Word64 Word32 (Ptr PageType) deriving (Generic)
+
+instance CStorable MemoryObjectT
+instance Storable MemoryObjectT where
+   sizeOf    = cSizeOf
+   alignment = cAlignment
+   poke      = cPoke
+   peek      = cPeek
 
 instance Storable MemoryObject where
-   alignment _ = 8
-   sizeOf    _ = (16 + sizeOf (undefined :: Word32) + sizeOf (undefined :: Ptr ())) `roundTo` 8
+   alignment _ = alignment (undefined :: MemoryObjectT)
+   sizeOf    _ = sizeOf (undefined :: MemoryObjectT)
+   poke      _ = undefined
    peek ptr    = do
-      ts <- peekByteOff ptr 0
-      ls <- peekByteOff ptr 8
-      (n :: Word)  <- peekByteOff ptr 16
-      addr <- peekByteOff ptr (16 + sizeOf (undefined :: Word))
-      typs <- peekArray (fromIntegral n) addr
-      return $ MemoryObject ts ls typs
+      MemoryObjectT tm lm n p <- peek (castPtr ptr)
+      typs <- peekArray (fromIntegral n) p
+      return $ MemoryObject tm lm typs
 
-   poke _ = undefined
 
+instance CStorable MemoryObject where
+   cAlignment = alignment
+   cSizeOf    = sizeOf
+   cPeek      = peek
+   cPoke      = poke
 
 
 -- | Structure of a topology object
@@ -494,7 +514,7 @@ data Object = Object
                                           -- 
                                           -- Its value must not be changed, hwloc_bitmap_dup() must be used instead.
 
-   , objectDistances :: [Ptr Distance]    -- ^ Distances between all objects at same depth below this object
+   , objectDistances :: [Distance]        -- ^ Distances between all objects at same depth below this object
    , objectInfo      :: Map String String -- ^ Array of stringified info type=name
 
    , objectUserData :: Ptr ()             -- ^ Application-given private data pointer,
@@ -506,123 +526,117 @@ data Object = Object
 
 data Info = Info String String
 
+data InfoT = InfoT CString CString deriving (Generic)
+
+instance CStorable InfoT
+instance Storable InfoT where
+   alignment = cAlignment
+   sizeOf    = cSizeOf
+   peek      = cPeek
+   poke      = cPoke
+
 instance Storable Info where
-   alignment _ = 8
-   sizeOf _    = 2 * sizeOf (undefined :: Ptr ())
+   alignment _ = alignment (undefined :: InfoT)
+   sizeOf _    = sizeOf (undefined :: InfoT)
    poke        = undefined
    peek ptr    = do
-      nptr <- peekByteOff ptr 0
-      vptr <- peekByteOff ptr (sizeOf (undefined :: Ptr ()))
-      Info <$> peekCString nptr <*> peekCString vptr
+      InfoT x y <- peek (castPtr ptr)
+      Info <$> peekCString x <*> peekCString y
 
+data ObjT = ObjT Word32 Word32 CString MemoryObject (Ptr ()) Word32 Word32 (Ptr Object) (Ptr Object) (Ptr Object)
+                 Word32 (Ptr Object) (Ptr Object) Word32 (Ptr (Ptr Object)) (Ptr Object) (Ptr Object) Int32
+                 Word32 (Ptr Object) Word32 (Ptr Object) CpuSet CpuSet CpuSet NodeSet NodeSet NodeSet
+                 (Ptr (Ptr Distance)) Word32 (Ptr Info) Word32 (Ptr ())
+            deriving (Generic,Show)
 
-peekObject :: Ptr Object -> IO Object
-peekObject ptr = do
-   typ     <- toEnum . fromIntegral <$> (peekByteOff ptr 0 :: IO Word32)
-   osindex <- peekByteOff ptr 4
-   nameptr <- peekByteOff ptr 8
-   name    <- if nameptr == nullPtr
-                  then return ""
-                  else peekCString nameptr
-   memobj  <- peekByteOff ptr 16
-   ptrattr <- peekByteOff ptr 48  :: IO (Ptr ())
+instance CStorable ObjT
+instance Storable ObjT where
+   alignment = cAlignment
+   sizeOf    = cSizeOf
+   peek      = cPeek
+   poke      = cPoke
+   
 
-   attr <- case typ of
-      ObjectTypeSystem     -> return Nothing
-      ObjectTypeMachine    -> return Nothing
-      ObjectTypeNumaNode   -> return Nothing
-      ObjectTypePackage    -> return Nothing
-      ObjectTypeCore       -> return Nothing
-      ObjectTypePU         -> return Nothing
-      ObjectTypeCacheL1    -> Just . AttributeCache     <$> peek (castPtr ptrattr)
-      ObjectTypeCacheL2    -> Just . AttributeCache     <$> peek (castPtr ptrattr)
-      ObjectTypeCacheL3    -> Just . AttributeCache     <$> peek (castPtr ptrattr)
-      ObjectTypeCacheL4    -> Just . AttributeCache     <$> peek (castPtr ptrattr)
-      ObjectTypeCacheL5    -> Just . AttributeCache     <$> peek (castPtr ptrattr)
-      ObjectTypeICacheL1   -> Just . AttributeCache     <$> peek (castPtr ptrattr)
-      ObjectTypeICacheL2   -> Just . AttributeCache     <$> peek (castPtr ptrattr)
-      ObjectTypeICacheL3   -> Just . AttributeCache     <$> peek (castPtr ptrattr)
-      ObjectTypeGroup      -> Just . AttributeGroup     <$> peek (castPtr ptrattr)
-      ObjectTypeMisc       -> return Nothing
-      ObjectTypeBridge     -> Just . AttributeBridge    <$> peek (castPtr ptrattr)
-      ObjectTypePCIDevice  -> Just . AttributePCIDevice <$> peek (castPtr ptrattr)
-      ObjectTypeOSDevice   -> Just . AttributeOsDevice  <$> peek (castPtr ptrattr)
-      
+instance Storable Object where
+   alignment _ = alignment (undefined :: ObjT)
+   sizeOf    _ = sizeOf (undefined :: ObjT)
+   poke        = undefined
+   peek ptr    = do
+      ObjT typ' osindex nameptr memobj ptrattr depth logindex nextcousin prevcousin parent sibrank
+         nextsibling prevsibling arity childrenPtr 
+         _ _ -- firstchild lastchild
+         symsub ioarity iofchild miscarity
+         miscfchild cpuset ccpuset acpuset nodeset cnodeset anodeset distPtr distCount infoPtr infoCount
+         userdata <- peek (castPtr ptr)
+      o <- peek (castPtr ptr) :: IO ObjT
+      putStrLn (show o)
 
-   depth    <- peekByteOff ptr 56
-   logindex <- peekByteOff ptr 60
+      putStrLn (show (sizeOf (undefined :: ObjT)))
 
-   nextcousin  <- peekByteOff ptr 64
-   prevcousin  <- peekByteOff ptr 72
-   parent      <- peekByteOff ptr 80
-   sibrank     <- peekByteOff ptr 88
-   nextsibling <- peekByteOff ptr 96
-   prevsibling <- peekByteOff ptr 104
+      let typ = toEnum (fromIntegral typ')
+      name    <- if nameptr == nullPtr
+                     then return ""
+                     else peekCString nameptr
 
-   arity       <- peekByteOff ptr 112
-   childrenPtr <- peekByteOff ptr 120
-   children    <- peekArray arity childrenPtr
-   -- skip first child and last child
-   -- firstchild <- peekByteOff ptr 128
-   -- lastchild  <- peekByteOff ptr 136
+      attr <- case typ of
+         ObjectTypeSystem     -> return Nothing
+         ObjectTypeMachine    -> return Nothing
+         ObjectTypeNumaNode   -> return Nothing
+         ObjectTypePackage    -> return Nothing
+         ObjectTypeCore       -> return Nothing
+         ObjectTypePU         -> return Nothing
+         ObjectTypeCacheL1    -> Just . AttributeCache     <$> peek (castPtr ptrattr)
+         ObjectTypeCacheL2    -> Just . AttributeCache     <$> peek (castPtr ptrattr)
+         ObjectTypeCacheL3    -> Just . AttributeCache     <$> peek (castPtr ptrattr)
+         ObjectTypeCacheL4    -> Just . AttributeCache     <$> peek (castPtr ptrattr)
+         ObjectTypeCacheL5    -> Just . AttributeCache     <$> peek (castPtr ptrattr)
+         ObjectTypeICacheL1   -> Just . AttributeCache     <$> peek (castPtr ptrattr)
+         ObjectTypeICacheL2   -> Just . AttributeCache     <$> peek (castPtr ptrattr)
+         ObjectTypeICacheL3   -> Just . AttributeCache     <$> peek (castPtr ptrattr)
+         ObjectTypeGroup      -> Just . AttributeGroup     <$> peek (castPtr ptrattr)
+         ObjectTypeMisc       -> return Nothing
+         ObjectTypeBridge     -> Just . AttributeBridge    <$> peek (castPtr ptrattr)
+         ObjectTypePCIDevice  -> Just . AttributePCIDevice <$> peek (castPtr ptrattr)
+         ObjectTypeOSDevice   -> Just . AttributeOsDevice  <$> peek (castPtr ptrattr)
+         
 
-   symsub  <- peekByteOff ptr 144
-   ioarity <- peekByteOff ptr 148
-   iofchild <- peekByteOff ptr 152
+      putStrLn (show logindex)
+      children   <- peekArray (fromIntegral arity) childrenPtr
+      distancesP <- peekArray (fromIntegral distCount) distPtr
+      distances  <- traverse peek distancesP
 
-   miscarity <- peekByteOff ptr 160
-   miscfchild <- peekByteOff ptr 168
+      let f (Info x y) = (x,y)
+      infos     <- Map.fromList . fmap f <$> peekArray (fromIntegral infoCount) infoPtr
 
-   cpuset    <- peekByteOff ptr 176
-   ccpuset   <- peekByteOff ptr 184
-   acpuset   <- peekByteOff ptr 192
-   nodeset   <- peekByteOff ptr 200
-   cnodeset  <- peekByteOff ptr 208
-   anodeset  <- peekByteOff ptr 216
-
-   distPtr   <- peekByteOff ptr 224
-   distCount <- peekByteOff ptr 232
-   distances <- peekArray distCount distPtr
-
-   infoPtr   <- peekByteOff ptr 240
-   infoCount <- peekByteOff ptr 248
-
-   let f (Info x y) = (x,y)
-   infos     <- Map.fromList . fmap f <$> peekArray infoCount infoPtr
-
-   userdata <- peekByteOff ptr 256
-
-
-
-   return $ Object 
-      typ
-      osindex
-      name
-      memobj
-      attr
-      depth
-      logindex
-      prevcousin
-      nextcousin
-      parent
-      sibrank
-      nextsibling
-      prevsibling
-      children
-      symsub
-      ioarity
-      iofchild
-      miscarity
-      miscfchild
-      cpuset
-      ccpuset
-      acpuset
-      nodeset
-      cnodeset
-      anodeset
-      distances
-      infos
-      userdata
+      return $ Object 
+         typ
+         osindex
+         name
+         memobj
+         attr
+         depth
+         logindex
+         prevcousin
+         nextcousin
+         parent
+         sibrank
+         nextsibling
+         prevsibling
+         children
+         symsub
+         ioarity
+         iofchild
+         miscarity
+         miscfchild
+         cpuset
+         ccpuset
+         acpuset
+         nodeset
+         cnodeset
+         anodeset
+         distances
+         infos
+         userdata
 
 
 -- | Cache-specific Object Attributes
@@ -734,7 +748,7 @@ data Attribute
 -- In these cases, \p latency may be \c NULL.
 -- 
 data Distance = Distance
-   { distanceRelativeDepth :: Word     -- ^ Relative depth of the considered objects
+   { distanceRelativeDepth :: Word32     -- ^ Relative depth of the considered objects
                                        -- below the object containing this distance information.
    , distanceLatencies :: Maybe (Vector Float) -- ^ Matrix of latencies between objects, stored as a one-dimension array.
                                                -- May be \c NULL if the distances considered here are not latencies.
@@ -754,6 +768,25 @@ data Distance = Distance
    }
    deriving (Show)
 
+instance Storable Distance where
+   alignment _ = alignment (undefined :: DistanceT)
+   sizeOf    _ = sizeOf    (undefined :: DistanceT)
+   peek ptr    = do
+      DistanceT rd n l lm lb <- peek (castPtr ptr)
+      ls <- case fromIntegral n of
+         0  -> return Nothing
+         n' -> Just . Vector.fromList <$> peekArray n' l
+      return $ Distance rd ls lm lb
+   poke        = undefined
+
+data DistanceT = DistanceT Word32 Word32 (Ptr Float) Float Float deriving (Generic)
+
+instance CStorable DistanceT
+instance Storable DistanceT where
+   alignment = cAlignment
+   sizeOf    = cSizeOf
+   peek      = cPeek
+   poke      = cPoke
 
 
 newtype Topology = Topology (Ptr ())
@@ -2120,3 +2153,5 @@ foreign import ccall "hwloc_get_obj_by_depth" getObject' :: Topology -> Word -> 
 getObject :: Topology -> Word -> Word -> IO Object
 getObject topo depth idx = peekObject =<< getObject' topo depth idx
 
+peekObject :: Ptr Object -> IO Object
+peekObject = peek

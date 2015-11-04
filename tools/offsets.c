@@ -38,6 +38,7 @@ int main() {
    printf("infos_count offset %d\n", (char*)&obj.infos_count - (char*)&obj);
    printf("userdata offset %d\n", (char*)&obj.userdata - (char*)&obj);
 
+   printf("sizeof %d\n", sizeof(obj));
 
    return 0;
 }
